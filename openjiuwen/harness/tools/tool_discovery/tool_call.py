@@ -18,10 +18,16 @@ from openjiuwen.harness.tools.base_tool import ToolOutput
 class ToolCallInput(BaseModel):
     """Arguments accepted by the fixed ``tool_call`` wrapper."""
 
-    name: str = Field(..., description="Exact tool name returned by tool_search")
+    name: str = Field(
+        ...,
+        description=(
+            "Exact deferred tool name selected by automatic discovery or returned by tool_search. "
+            "Invoke the deferred tool only through this tool_call wrapper."
+        ),
+    )
     args: Dict[str, Any] = Field(
         ...,
-        description="Arguments matching the schema returned by tool_search",
+        description="Arguments matching the selected deferred tool's schema",
     )
 
 

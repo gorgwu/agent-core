@@ -116,6 +116,55 @@ async def test_before_model_call_updates_builder_and_keeps_preview_messages_inta
 
 
 @pytest.mark.asyncio
+async def test_jev_mode_uses_automatic_discovery_without_exposing_tool_search():
+    config = DeepAgentConfig(
+        progressive_tool_enabled=True,
+        tool_discovery_backend="jev",
+        language="en",
+    )
+    rail = _TestableProgressiveToolRail(config)
+    rail.seed_cached_tools(
+        meta_tool_names={"tool_search", "tool_call"},
+        all_tool_infos=[
+            ToolInfo(name="tool_search", description="Search the tool registry"),
+            ToolInfo(name="tool_call", description="Execute a discovered tool"),
+        ],
+    )
+    rail._collect_deferred_tool_descriptions = lambda _agent: {
+        "get_all_financial_tools": "List all configured financial API tools"
+    }
+    builder = SystemPromptBuilder(language="en")
+    builder.add_section(
+        PromptSection(
+            name="identity",
+            content={"en": "Base system prompt.", "cn": "Base system prompt."},
+        )
+    )
+    agent = Mock(system_prompt_builder=builder)
+    ctx = AgentCallbackContext(
+        agent=agent,
+        inputs=ModelCallInputs(
+            messages=[SystemMessage(content="preview prompt")],
+            tools=[
+                ToolInfo(name="tool_search", description="Search the tool registry"),
+                ToolInfo(name="tool_call", description="Execute a discovered tool"),
+            ],
+        ),
+        session=_FakeSession(),
+    )
+
+    await rail.before_model_call(ctx)
+
+    assert [tool.name for tool in ctx.inputs.tools] == ["tool_call"]
+    prompt = builder.build()
+    assert "configured retrieval backend automatically discovers deferred tools" in prompt
+    assert "Deferred tools available through tool_search" not in prompt
+    assert "get_all_financial_tools" not in prompt
+    assert "tool_search" in prompt  # Explicitly prohibited as an alternative.
+    assert "BM25 fallback" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_deferred_catalog_uses_initial_snapshot_then_incremental_attachments():
     config = DeepAgentConfig(progressive_tool_enabled=True, language="cn")
     rail = ProgressiveToolRail(config)

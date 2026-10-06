@@ -104,11 +104,31 @@ class ProgressiveToolInput(ConstructionInput):
             "(capped at 20; not exposed to the model)."
         ),
     )
+    tool_discovery_backend: str = param_field(
+        default="bm25",
+        description="Deferred-tool discovery backend: bm25 or jev.",
+    )
+    tool_discovery_api_key: str | None = param_field(
+        default=None,
+        description="Optional API key for the JEV tool-discovery endpoint.",
+    )
+    tool_discovery_api_base: str | None = param_field(
+        default=None,
+        description="Optional full URL for a compatible JEV Decisions API endpoint.",
+    )
+    tool_discovery_model: str = param_field(
+        default="typesafe/jev-1.13",
+        description="Model ID sent to the JEV Decisions API.",
+    )
+    tool_discovery_max_tools: int = param_field(
+        default=10,
+        description="Maximum number of deferred tools selected by JEV (capped at 10).",
+    )
 
 
 def _build_progressive_tool_rail(params: dict[str, Any], context: Any) -> ProgressiveToolRail:
     """Build ProgressiveToolRail from extras model + workspace/language."""
-    p = dict(params or {})
+    inputs = ProgressiveToolInput.resolve(params, context)
     config = DeepAgentConfig(
         model=_parent_model(context),
         workspace=getattr(context, "workspace", None),
@@ -116,7 +136,12 @@ def _build_progressive_tool_rail(params: dict[str, Any], context: Any) -> Progre
         language=getattr(context, "language", None) or "cn",
     )
     config.progressive_tool_enabled = True
-    config.tool_search_limit = p.get("search_limit", 5)
+    config.tool_search_limit = inputs.search_limit
+    config.tool_discovery_backend = inputs.tool_discovery_backend
+    config.tool_discovery_api_key = inputs.tool_discovery_api_key
+    config.tool_discovery_api_base = inputs.tool_discovery_api_base
+    config.tool_discovery_model = inputs.tool_discovery_model
+    config.tool_discovery_max_tools = inputs.tool_discovery_max_tools
     return ProgressiveToolRail(config)
 
 

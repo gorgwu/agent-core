@@ -203,6 +203,11 @@ class ProgressiveToolSpec(BaseModel):
 
     enabled: bool = True
     search_limit: int = 5
+    tool_discovery_backend: str = "bm25"
+    tool_discovery_api_key: Optional[str] = None
+    tool_discovery_api_base: Optional[str] = None
+    tool_discovery_model: str = "typesafe/jev-1.13"
+    tool_discovery_max_tools: int = 10
 
 
 class SysOperationSpec(BaseModel):
@@ -657,6 +662,11 @@ class DeepAgentSpec(BaseModel):
         return {
             "progressive_tool_enabled": pt.enabled,
             "tool_search_limit": pt.search_limit,
+            "tool_discovery_backend": pt.tool_discovery_backend,
+            "tool_discovery_api_key": pt.tool_discovery_api_key,
+            "tool_discovery_api_base": pt.tool_discovery_api_base,
+            "tool_discovery_model": pt.tool_discovery_model,
+            "tool_discovery_max_tools": pt.tool_discovery_max_tools,
         }
 
 

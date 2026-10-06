@@ -286,6 +286,11 @@ class DeepAgentConfig:
     # Default result count for tool_search; the model may override it with limit.
     # The effective value is clamped to 1..20.
     tool_search_limit: int = 5
+    tool_discovery_backend: str = "bm25"
+    tool_discovery_api_key: Optional[str] = None
+    tool_discovery_api_base: Optional[str] = None
+    tool_discovery_model: str = "typesafe/jev-1.13"
+    tool_discovery_max_tools: int = 10
 
     # Plan mode config
     default_mode: AgentMode = AgentMode.NORMAL

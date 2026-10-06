@@ -12,8 +12,10 @@ from pydantic import BaseModel
 
 from openjiuwen.core.common.logging import logger
 from openjiuwen.core.foundation.llm.schema.tool_call import ToolCall
+from openjiuwen.core.foundation.llm.schema.message import UserMessage
 from openjiuwen.core.foundation.tool import ToolCard, ToolExposure, ToolInfo
 from openjiuwen.core.single_agent.interrupt.exception import ToolInterruptException
+from openjiuwen.core.single_agent.prompts.builder import PromptSection
 from openjiuwen.core.single_agent.rail.base import AgentCallbackContext
 from openjiuwen.harness.prompts.builder import SystemPromptBuilder
 from openjiuwen.harness.prompts.prompt_attachment_manager import PromptAttachmentKind
@@ -26,6 +28,10 @@ from openjiuwen.harness.rails.base import DeepAgentRail
 from openjiuwen.harness.schema.config import DeepAgentConfig
 from openjiuwen.harness.tools.base_tool import ToolOutput
 from openjiuwen.harness.tools.tool_discovery.bm25 import BM25ToolIndex
+from openjiuwen.harness.tools.tool_discovery.decisions_api import (
+    has_decisions_api_key,
+    rank_decisions_api_tools,
+)
 from openjiuwen.harness.tools.tool_discovery.tool_call import RelayedToolOutput, ToolCallTool
 from openjiuwen.harness.tools.tool_discovery.tool_search import (
     DEFAULT_TOOL_SEARCH_LIMIT,
@@ -35,6 +41,9 @@ from openjiuwen.harness.tools.tool_discovery.tool_search import (
 _DISCOVERED_TOOLS_KEY = "__progressive_discovered_tool_names__"
 _DISCOVERED_TOOL_FINGERPRINTS_KEY = "__progressive_discovered_tool_fingerprints__"
 _DISCOVERY_TRACE_KEY = "__progressive_tool_discovery_trace__"
+_DISCOVERED_TOOLS_TURN_KEY = "__progressive_discovered_tool_turn_index__"
+_TOOL_DISCOVERY_STATE_KEY = "__progressive_tool_discovery__"
+_TOOL_DISCOVERY_TOOLS_SECTION = "progressive_tool_discovery_selected_tools"
 _DEFERRED_TOOL_ATTACHMENT_SECTION = "progressive_deferred_tools"
 _DEFERRED_TOOL_ATTACHMENT_SOURCE = "progressive_tool_rail"
 _DEFERRED_TOOL_CATALOG_STATE_KEY = "__progressive_deferred_tool_catalog__"
@@ -71,9 +80,16 @@ class ProgressiveToolRail(DeepAgentRail):
         self._tool_search_index: Optional[BM25ToolIndex] = None
         self._tool_search_index_revision: Optional[int] = None
         self._tool_search_registry: Any = None
+        self._jev_disabled = False
 
     def init(self, agent) -> None:
         """Register progressive meta tools to resource manager and ability manager."""
+        if str(
+            getattr(self._config, "tool_discovery_backend", "bm25")
+        ).strip().lower() == "jev":
+            self._jev_disabled = not has_decisions_api_key(
+                getattr(self._config, "tool_discovery_api_key", None)
+            )
         language = getattr(self._config, "language", "cn") or "cn"
         agent_id = getattr(getattr(agent, "card", None), "id", None)
 
@@ -171,6 +187,12 @@ class ProgressiveToolRail(DeepAgentRail):
 
     async def before_invoke(self, ctx: AgentCallbackContext) -> None:
         """Cache the full registered tool inventory for discovery authorization."""
+        session = getattr(ctx, "session", None)
+        if session is not None:
+            turn_index = self._user_message_count(getattr(ctx, "inputs", None))
+            if session.get_state(_DISCOVERED_TOOLS_TURN_KEY) != turn_index:
+                self._set_discovered_tools(session, [])
+                session.update_state({_DISCOVERED_TOOLS_TURN_KEY: turn_index})
         self._cached_all_tool_infos = await self._list_tool_infos(ctx.agent)
         self._ensure_initial_deferred_catalog(ctx)
 
@@ -196,15 +218,54 @@ class ProgressiveToolRail(DeepAgentRail):
             current_tools=current_deferred_tools,
         )
 
+        backend = str(
+            getattr(self._config, "tool_discovery_backend", "bm25")
+        ).strip().lower()
+        routed_tools: List[ToolInfo] = []
+        manual_search_fallback = backend == "jev" and self._jev_disabled
+        if backend == "jev" and not self._jev_disabled:
+            routed_tools, manual_search_fallback = await self._route_deferred_tools(ctx)
+            if manual_search_fallback:
+                self._jev_disabled = True
+        use_automatic_discovery = backend == "jev" and not manual_search_fallback
+        prompt_backend = "bm25" if manual_search_fallback else backend
+
         rules_section = self._build_progressive_tool_rules_section(
             deferred_tool_descriptions=initial_deferred_tools,
+            tool_discovery_backend=prompt_backend,
         )
 
         builder.add_section(rules_section)
-        await self._sync_deferred_tool_attachment(
-            ctx,
-            current_tools=current_deferred_tools,
-        )
+        if use_automatic_discovery:
+            rendered_tools = self._render_routed_tools(routed_tools)
+            english = (
+                "The configured retrieval backend automatically discovers deferred tools. "
+                "Tools listed below, if any, were selected by automatic retrieval. "
+                "always invoke a selected deferred tool by calling the `tool_call` wrapper "
+                "using its exact name and complete schema. Never issue a tool call whose "
+                "function name is the deferred tool name itself. If none fit, do not use `tool_search`."
+            )
+            chinese = (
+                "以下工具（如果有）由自动检索选出。必须通过 `tool_call` 使用准确名称和完整 schema 调用。"
+                "如果没有合适工具，不要使用 `tool_search`。"
+            )
+            builder.add_section(
+                PromptSection(
+                    name=_TOOL_DISCOVERY_TOOLS_SECTION,
+                    content={
+                        "en": f"## Automatically discovered deferred tools\n{english}\n\n{rendered_tools}",
+                        "cn": f"## 自动发现的延迟工具\n{chinese}\n\n{rendered_tools}",
+                    },
+                    priority=74,
+                    category="system_prompt",
+                )
+            )
+        else:
+            builder.remove_section(_TOOL_DISCOVERY_TOOLS_SECTION)
+            await self._sync_deferred_tool_attachment(
+                ctx,
+                current_tools=current_deferred_tools,
+            )
 
         inputs = getattr(ctx, "inputs", None)
         tools = getattr(inputs, "tools", None)
@@ -231,6 +292,9 @@ class ProgressiveToolRail(DeepAgentRail):
 
         meta_visible_tools = set(self._meta_tool_names)
         direct_visible_tools = self._get_direct_tool_names(ctx.agent)
+        if use_automatic_discovery:
+            meta_visible_tools.discard("tool_search")
+            direct_visible_tools.discard("tool_search")
 
         logger.info(
             "[ProgressiveToolRail][DEBUG] visibility | meta=%s | direct=%s",
@@ -269,6 +333,186 @@ class ProgressiveToolRail(DeepAgentRail):
         )
 
         inputs.tools = filtered_tools
+
+    async def _route_deferred_tools(
+        self,
+        ctx: AgentCallbackContext,
+    ) -> tuple[List[ToolInfo], bool]:
+        """Select deferred tools for the latest user request."""
+        backend = str(
+            getattr(self._config, "tool_discovery_backend", "bm25")
+        ).strip().lower()
+        query = self._latest_user_request(getattr(ctx, "inputs", None))
+        session = getattr(ctx, "session", None)
+        if not query:
+            self._set_discovered_tools(session, [])
+            if session is not None:
+                session.update_state({_TOOL_DISCOVERY_STATE_KEY: None})
+            return [], False
+
+        candidates = self._list_registered_deferred_tool_infos(
+            getattr(ctx, "agent", None)
+        )
+        if not candidates:
+            self._set_discovered_tools(session, [])
+            if session is not None:
+                session.update_state({_TOOL_DISCOVERY_STATE_KEY: None})
+            return [], False
+
+        fingerprints = {
+            str(tool.name): BM25ToolIndex.tool_fingerprint(tool)
+            for tool in candidates
+        }
+        catalog = json.dumps(fingerprints, sort_keys=True, separators=(",", ":"))
+        model = str(
+            getattr(self._config, "tool_discovery_model", "typesafe/jev-1.13")
+        )
+        max_tools = min(
+            10,
+            max(1, int(getattr(self._config, "tool_discovery_max_tools", 10))),
+        )
+        turn_index = self._user_message_count(getattr(ctx, "inputs", None))
+        previous = session.get_state(_TOOL_DISCOVERY_STATE_KEY) if session is not None else None
+        cache_hit = (
+            isinstance(previous, dict)
+            and previous.get("query") == query
+            and previous.get("turn_index") == turn_index
+            and previous.get("catalog") == catalog
+            and previous.get("backend") == backend
+            and previous.get("model") == model
+            and previous.get("max_tools") == max_tools
+            and previous.get("api_base")
+            == getattr(self._config, "tool_discovery_api_base", None)
+        )
+        scores: Dict[str, float] = {}
+        selection_backend = backend
+        fallback_error = ""
+        manual_search_fallback = False
+        by_name = {str(tool.name): tool for tool in candidates}
+        if cache_hit:
+            selected_names = previous.get("names", [])
+            selected = [by_name[name] for name in selected_names if name in by_name]
+            previous_scores = previous.get("scores", {})
+            if isinstance(previous_scores, dict):
+                scores = {
+                    str(name): float(score)
+                    for name, score in previous_scores.items()
+                    if name in selected_names
+                }
+            selection_backend = str(previous.get("selection_backend", backend))
+            fallback_error = str(previous.get("fallback_error", ""))
+            manual_search_fallback = bool(previous.get("manual_search_fallback"))
+        else:
+            try:
+                ranked = await rank_decisions_api_tools(
+                    query=query,
+                    tools=candidates,
+                    model=model,
+                    api_key=getattr(self._config, "tool_discovery_api_key", None),
+                    api_base=getattr(self._config, "tool_discovery_api_base", None),
+                    max_tools=max_tools,
+                )
+                selected = [item.tool for item in ranked]
+                scores = {str(item.tool.name): item.score for item in ranked}
+            except Exception as exc:
+                fallback_error = str(exc)
+                selection_backend = "bm25_tool_search_fallback"
+                manual_search_fallback = True
+                self._jev_disabled = True
+                logger.warning(
+                    "[ProgressiveToolRail] discovery backend %s failed; enabling model-directed tool_search fallback: %s",
+                    backend,
+                    exc,
+                )
+                selected = []
+
+        selected_names = [str(tool.name) for tool in selected]
+        selected_fingerprints = {
+            name: fingerprints[name] for name in selected_names if name in fingerprints
+        }
+        if not (cache_hit and manual_search_fallback):
+            self._set_discovered_tools(
+                session,
+                selected_names,
+                fingerprints=selected_fingerprints,
+            )
+        if session is not None and not cache_hit:
+            session.update_state(
+                {
+                    _TOOL_DISCOVERY_STATE_KEY: {
+                        "query": query,
+                        "turn_index": turn_index,
+                        "catalog": catalog,
+                        "backend": backend,
+                        "model": model,
+                        "max_tools": max_tools,
+                        "api_base": getattr(self._config, "tool_discovery_api_base", None),
+                        "names": selected_names,
+                        "scores": scores,
+                        "selection_backend": selection_backend,
+                        "fallback_error": fallback_error,
+                        "manual_search_fallback": manual_search_fallback,
+                    }
+                }
+            )
+            self._append_trace(
+                session,
+                {
+                    "action": "automatic_discovery",
+                    "query": query,
+                    "backend": selection_backend,
+                    "candidate_count": len(candidates),
+                    "matched": selected_names,
+                    "scores": scores,
+                    "fallback_error": fallback_error,
+                },
+            )
+            logger.info(
+                "[ToolDiscovery] deferred tool routing | candidate_count=%s | backend=%s | matched=%s",
+                len(candidates),
+                selection_backend,
+                selected_names,
+            )
+        return selected, manual_search_fallback
+
+    @staticmethod
+    def _latest_user_request(inputs: Any) -> str:
+        messages = getattr(inputs, "messages", None) or []
+        for message in reversed(messages):
+            if not isinstance(message, UserMessage):
+                continue
+            content = getattr(message, "content", "")
+            if isinstance(content, str):
+                return content.strip()
+            if isinstance(content, list):
+                return "\n".join(
+                    str(item.get("text", "")) if isinstance(item, dict) else str(item)
+                    for item in content
+                    if isinstance(item, (str, dict))
+                ).strip()
+        return ""
+
+    @staticmethod
+    def _user_message_count(inputs: Any) -> int:
+        return sum(
+            isinstance(message, UserMessage)
+            for message in (getattr(inputs, "messages", None) or [])
+        )
+
+    @staticmethod
+    def _render_routed_tools(tools: List[ToolInfo]) -> str:
+        if not tools:
+            return "(No deferred tool was selected.)"
+        rendered = []
+        for tool in tools:
+            parameters = tool.parameters
+            if inspect.isclass(parameters) and issubclass(parameters, BaseModel):
+                parameters = parameters.model_json_schema()
+            rendered.append(
+                f"### {tool.name}\n{tool.description}\n"
+                f"Parameters: {json.dumps(parameters, ensure_ascii=False, default=str)}"
+            )
+        return "\n\n".join(rendered)
 
     @staticmethod
     def _get_direct_tool_names(agent: Any) -> Set[str]:
@@ -413,7 +657,26 @@ class ProgressiveToolRail(DeepAgentRail):
         limit: int = 5,
         session: Any = None,
     ) -> List[Dict[str, Any]]:
-        """Search BM25 and authorize matching tools for the wrapper call."""
+        """Search BM25 unless JEV failure enabled model-directed fallback."""
+        backend = str(
+            getattr(self._config, "tool_discovery_backend", "bm25")
+        ).strip().lower()
+        discovery_state = (
+            session.get_state(_TOOL_DISCOVERY_STATE_KEY)
+            if session is not None
+            else None
+        )
+        if backend == "jev" and not (
+            self._jev_disabled
+            or (
+                isinstance(discovery_state, dict)
+                and discovery_state.get("manual_search_fallback")
+            )
+        ):
+            raise RuntimeError(
+                "tool_search is disabled while JEV discovery is active."
+            )
+
         query = (query or "").strip().lower()
         if not query:
             return []
@@ -470,7 +733,7 @@ class ProgressiveToolRail(DeepAgentRail):
             return ToolOutput(
                 success=False,
                 error=(
-                    f"Deferred tool '{target_name}' must be returned by tool_search "
+                    f"Deferred tool '{target_name}' must be selected by discovery "
                     "before it can be called."
                 ),
             )
@@ -715,7 +978,7 @@ class ProgressiveToolRail(DeepAgentRail):
 
         self._reject_tool_call(
             ctx,
-            f"Deferred tool '{tool_name}' must be found with tool_search before it can be called.",
+            f"Deferred tool '{tool_name}' must be selected by discovery before it can be called.",
         )
 
     @staticmethod
@@ -750,6 +1013,7 @@ class ProgressiveToolRail(DeepAgentRail):
         agent: Any = None,
         session: Any = None,
         deferred_tool_descriptions: Optional[Dict[str, str]] = None,
+        tool_discovery_backend: Optional[str] = None,
     ):
         """Build stable rules plus the session's initial deferred catalog."""
         if deferred_tool_descriptions is None:
@@ -757,6 +1021,8 @@ class ProgressiveToolRail(DeepAgentRail):
         _ = session
         return build_multilingual_progressive_tool_rules_section(
             deferred_tool_descriptions=deferred_tool_descriptions,
+            tool_discovery_backend=tool_discovery_backend
+            or str(getattr(self._config, "tool_discovery_backend", "bm25")),
         )
 
     async def _sync_deferred_tool_attachment(

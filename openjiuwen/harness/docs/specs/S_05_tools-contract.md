@@ -6,8 +6,8 @@
 |---|---|
 | 类型 | spec |
 | 关联模块 | `openjiuwen/harness/tools/`（130 文件）、`openjiuwen/harness/schema/task.py`、`openjiuwen/core/foundation/tool/base.py`（`Tool.render_for_llm`） |
-| 最近一次修订日期 | 2026-09-23 |
-| 关联 feature | `F_04_tool-result-llm-rendering.md` |
+| 最近一次修订日期 | 2026-10-01 |
+| 关联 feature | `F_07_tool-discovery.md` |
 
 ## 范围 / 边界
 
@@ -43,10 +43,13 @@ i18n、工具生命周期。`tools/` 是 harness 最大的子模块（130 文件
 2. **工具注册走 `DeepAgent` / rail 的卡片机制**：工具以 `Tool | ToolCard` 形态存在，
    `card.name` 是身份（`_tool_identity` / `ability_manager.get(name)` 强校验）；新增工具
    不得复用已有 card.name。卸载先校验 card 身份（见 `S_04` 不变量 7）。
-3. **工具发现**：`tool_discovery/` 提供 `ToolSearchTool` + bm25 检索
-   （`tool_discovery/bm25.py`）以及固定的 `ToolCallTool` 包装器。模型先搜索并授权 deferred
-   工具，再经 `tool_call` 交给原 `AbilityManager` 生命周期执行；`ListSkillTool` /
-   `SkillTool`（`tools/skills/`）负责技能类工具。
+3. **工具发现**：`tool_discovery/` 提供 BM25 基线、JEV System 1 工具选择 API
+  以及固定的 `ToolCallTool` 包装器。BM25 模式由模型调用 `ToolSearchTool`；JEV
+   模式在模型调用前以当前用户请求为 `state`、以 deferred 工具候选为 typed Choice
+   `criteria`，将本地生成的 option key 映射回已注册的 `ToolInfo`。两种模式都通过同一
+   session name/fingerprint 授权，再由固定 `tool_call` 交给原 `AbilityManager` 生命周期执行；
+   JEV 只做发现，不生成工具参数或执行工具。`ListSkillTool` / `SkillTool`（`tools/skills/`）
+   负责技能类工具。
 4. **工具分组簇**：
    - web：`create_web_tools()`（fetch / free_search / paid_search）+ `WebFreeSearchTool` /
      `WebFetchWebpageTool`；`is_free_search_enabled()` / `is_paid_search_enabled()` 门控。

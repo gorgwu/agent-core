@@ -48,6 +48,25 @@ FULL_SCHEMA = {
 }
 
 
+@pytest.mark.asyncio
+async def test_tool_search_is_blocked_when_jev_discovery_is_active():
+    rail = ProgressiveToolRail(
+        DeepAgentConfig(progressive_tool_enabled=True, tool_discovery_backend="jev")
+    )
+    search_tool = ToolSearchTool(search_tools=rail._search_tools)
+    session = _FakeSession()
+
+    result = await search_tool.invoke(
+        {"query": "calendar"},
+        session=session,
+    )
+
+    assert result.success is False
+    assert "disabled while JEV discovery is active" in (result.error or "")
+    assert rail._tool_search_index is None
+    assert session.get_state("__progressive_discovered_tool_names__") is None
+
+
 class _FakeSession:
     def __init__(self, state: dict[str, Any] | None = None):
         self._state = dict(state or {})
@@ -453,7 +472,7 @@ async def test_tool_call_rejects_a_name_that_was_not_searched():
     )
 
     assert output.success is False
-    assert "must be returned by tool_search" in (output.error or "")
+    assert "must be selected by discovery" in (output.error or "")
     assert manager.executed == []
 
 

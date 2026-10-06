@@ -180,6 +180,7 @@ def _compact_tool_description(description: str) -> str:
 def build_progressive_tool_rules_prompt(
     language: str = "cn",
     deferred_tool_descriptions: Optional[Dict[str, str]] = None,
+    tool_discovery_backend: str = "bm25",
 ) -> str:
     """Build the stable rules and this session's initial deferred-tool catalog.
 
@@ -189,6 +190,28 @@ def build_progressive_tool_rules_prompt(
     """
 
     lang = language if language in PROGRESSIVE_TOOL_RULES_HEADER else "cn"
+    if str(tool_discovery_backend or "bm25").strip().lower() == "jev":
+        title = PROGRESSIVE_TOOL_RULES_HEADER[lang]
+        if lang == "cn":
+            return title + (
+                "当前使用自动检索发现 deferred 工具。每轮用户请求后检索相关工具，"
+                "并在自动发现工具部分提供名称和完整 schema。"
+                "只能通过固定的 `tool_call` 调用其中列出的工具。"
+                "如果该部分没有合适工具，不要调用 `tool_search` 或猜测工具名称；"
+                "直接回答，或说明当前没有合适的 deferred 工具。"
+            )
+        return title + (
+            "The configured retrieval backend automatically discovers deferred tools for each user request. "
+            "The `Automatically discovered deferred tools` section lists the selected tools "
+            "with their complete schemas. These are not direct callable tools: "
+            "always invoke a selected deferred tool by calling the `tool_call` wrapper "
+            "with `name` set to the exact listed tool name and `args` set to its arguments. "
+            "Never issue a tool call whose function name is the deferred tool name itself. "
+            "If no suitable tool is listed, do not call "
+            "`tool_search` or guess a tool name; answer directly or explain that no "
+            "suitable deferred tool is available."
+        )
+
     prompt = PROGRESSIVE_TOOL_RULES_HEADER[lang] + PROGRESSIVE_TOOL_RULES_BODY[lang]
     if lang == "cn":
         prompt += (
@@ -339,6 +362,7 @@ def build_multilingual_navigation_section(
 
 def build_multilingual_progressive_tool_rules_section(
     deferred_tool_descriptions: Optional[Dict[str, str]] = None,
+    tool_discovery_backend: str = "bm25",
 ) -> "PromptSection":
     return PromptSection(
         name=SectionName.PROGRESSIVE_TOOL_RULES,
@@ -346,10 +370,12 @@ def build_multilingual_progressive_tool_rules_section(
             "cn": build_progressive_tool_rules_prompt(
                 "cn",
                 deferred_tool_descriptions,
+                tool_discovery_backend,
             ),
             "en": build_progressive_tool_rules_prompt(
                 "en",
                 deferred_tool_descriptions,
+                tool_discovery_backend,
             ),
         },
         priority=75,
