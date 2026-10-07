@@ -14,6 +14,7 @@ Team's ``core.explore_agent`` / ``core.plan_agent`` / ``core.browser_agent``.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -124,6 +125,10 @@ class ProgressiveToolInput(ConstructionInput):
         default=10,
         description="Maximum number of deferred tools selected by JEV (capped at 10).",
     )
+    tool_discovery_min_score: float = param_field(
+        default=0.01,
+        description="Minimum JEV score; returned tools must score strictly higher.",
+    )
 
 
 def _build_progressive_tool_rail(params: dict[str, Any], context: Any) -> ProgressiveToolRail:
@@ -141,7 +146,14 @@ def _build_progressive_tool_rail(params: dict[str, Any], context: Any) -> Progre
     config.tool_discovery_api_key = inputs.tool_discovery_api_key
     config.tool_discovery_api_base = inputs.tool_discovery_api_base
     config.tool_discovery_model = inputs.tool_discovery_model
-    config.tool_discovery_max_tools = inputs.tool_discovery_max_tools
+    config.tool_discovery_max_tools = min(10, max(1, inputs.tool_discovery_max_tools))
+    try:
+        min_score = float(inputs.tool_discovery_min_score)
+    except (TypeError, ValueError):
+        min_score = 0.01
+    if not math.isfinite(min_score):
+        min_score = 0.01
+    config.tool_discovery_min_score = min(1.0, max(0.0, min_score))
     return ProgressiveToolRail(config)
 
 

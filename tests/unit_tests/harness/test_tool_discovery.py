@@ -65,6 +65,7 @@ def test_progressive_tool_spec_passes_discovery_settings_to_agent_config():
         tool_discovery_backend="jev",
         tool_discovery_model="typesafe/jev-1.13",
         tool_discovery_max_tools=10,
+        tool_discovery_min_score=0.01,
     )
 
     deep_agent_spec = DeepAgentSpec.model_construct(progressive_tool=spec)
@@ -77,6 +78,7 @@ def test_progressive_tool_spec_passes_discovery_settings_to_agent_config():
         "tool_discovery_api_base": None,
         "tool_discovery_model": "typesafe/jev-1.13",
         "tool_discovery_max_tools": 10,
+        "tool_discovery_min_score": 0.01,
     }
 
 

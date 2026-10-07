@@ -208,6 +208,7 @@ class ProgressiveToolSpec(BaseModel):
     tool_discovery_api_base: Optional[str] = None
     tool_discovery_model: str = "typesafe/jev-1.13"
     tool_discovery_max_tools: int = 10
+    tool_discovery_min_score: float = 0.01
 
 
 class SysOperationSpec(BaseModel):
@@ -667,6 +668,7 @@ class DeepAgentSpec(BaseModel):
             "tool_discovery_api_base": pt.tool_discovery_api_base,
             "tool_discovery_model": pt.tool_discovery_model,
             "tool_discovery_max_tools": pt.tool_discovery_max_tools,
+            "tool_discovery_min_score": pt.tool_discovery_min_score,
         }
 
 

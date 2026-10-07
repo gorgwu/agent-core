@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import math
+import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from pydantic import BaseModel
@@ -54,6 +57,7 @@ _DEFERRED_TOOL_CATALOG_FINGERPRINTS_STATE_KEY = "fingerprints"
 _DEFERRED_TOOL_REGISTRY_REVISION_METADATA_KEY = "registry_revision"
 _DEFERRED_TOOL_FULL_SNAPSHOT_INTERVAL = 10
 _NESTED_TOOL_CALL_KEY = "__progressive_nested_tool_call__"
+_JIUWENSWARM_USER_MESSAGE_PREFIX = "You receive a new message:"
 
 
 class ProgressiveToolRail(DeepAgentRail):
@@ -331,7 +335,6 @@ class ProgressiveToolRail(DeepAgentRail):
             len(filtered_tool_names),
             filtered_tool_names,
         )
-
         inputs.tools = filtered_tools
 
     async def _route_deferred_tools(
@@ -371,6 +374,13 @@ class ProgressiveToolRail(DeepAgentRail):
             10,
             max(1, int(getattr(self._config, "tool_discovery_max_tools", 10))),
         )
+        try:
+            min_score = float(getattr(self._config, "tool_discovery_min_score", 0.01))
+        except (TypeError, ValueError):
+            min_score = 0.01
+        if not math.isfinite(min_score):
+            min_score = 0.01
+        min_score = min(1.0, max(0.0, min_score))
         turn_index = self._user_message_count(getattr(ctx, "inputs", None))
         previous = session.get_state(_TOOL_DISCOVERY_STATE_KEY) if session is not None else None
         cache_hit = (
@@ -381,6 +391,7 @@ class ProgressiveToolRail(DeepAgentRail):
             and previous.get("backend") == backend
             and previous.get("model") == model
             and previous.get("max_tools") == max_tools
+            and previous.get("min_score") == min_score
             and previous.get("api_base")
             == getattr(self._config, "tool_discovery_api_base", None)
         )
@@ -388,6 +399,7 @@ class ProgressiveToolRail(DeepAgentRail):
         selection_backend = backend
         fallback_error = ""
         manual_search_fallback = False
+        conversation: List[Dict[str, Any]] = []
         by_name = {str(tool.name): tool for tool in candidates}
         if cache_hit:
             selected_names = previous.get("names", [])
@@ -403,14 +415,17 @@ class ProgressiveToolRail(DeepAgentRail):
             fallback_error = str(previous.get("fallback_error", ""))
             manual_search_fallback = bool(previous.get("manual_search_fallback"))
         else:
+            conversation = self._conversation_context(getattr(ctx, "inputs", None))
             try:
                 ranked = await rank_decisions_api_tools(
                     query=query,
                     tools=candidates,
+                    conversation=conversation,
                     model=model,
                     api_key=getattr(self._config, "tool_discovery_api_key", None),
                     api_base=getattr(self._config, "tool_discovery_api_base", None),
                     max_tools=max_tools,
+                    min_score=min_score,
                 )
                 selected = [item.tool for item in ranked]
                 scores = {str(item.tool.name): item.score for item in ranked}
@@ -419,11 +434,12 @@ class ProgressiveToolRail(DeepAgentRail):
                 selection_backend = "bm25_tool_search_fallback"
                 manual_search_fallback = True
                 self._jev_disabled = True
-                logger.warning(
-                    "[ProgressiveToolRail] discovery backend %s failed; enabling model-directed tool_search fallback: %s",
-                    backend,
-                    exc,
-                )
+                if backend != "jev":
+                    logger.warning(
+                        "[ProgressiveToolRail] discovery backend %s failed; enabling model-directed tool_search fallback: %s",
+                        backend,
+                        exc,
+                    )
                 selected = []
 
         selected_names = [str(tool.name) for tool in selected]
@@ -446,6 +462,7 @@ class ProgressiveToolRail(DeepAgentRail):
                         "backend": backend,
                         "model": model,
                         "max_tools": max_tools,
+                        "min_score": min_score,
                         "api_base": getattr(self._config, "tool_discovery_api_base", None),
                         "names": selected_names,
                         "scores": scores,
@@ -462,11 +479,38 @@ class ProgressiveToolRail(DeepAgentRail):
                     "query": query,
                     "backend": selection_backend,
                     "candidate_count": len(candidates),
+                    "max_tools": max_tools,
+                    "min_score": min_score,
                     "matched": selected_names,
                     "scores": scores,
                     "fallback_error": fallback_error,
                 },
             )
+        if not cache_hit and backend == "jev":
+            logger.info(
+                "[ToolDiscovery] JEV routing: %s",
+                json.dumps(
+                    {
+                        "timestamp": datetime.now().astimezone().isoformat(
+                            timespec="milliseconds"
+                        ),
+                        "session_id": self._get_attachment_session_id(ctx),
+                        "deferred_tool_count": len(candidates),
+                        "max_tools": max_tools,
+                        "min_score": min_score,
+                        "user_prompt": query,
+                        "jev_context": conversation,
+                        "selected_tools": [
+                            {"name": name, "score": scores.get(name)}
+                            for name in selected_names
+                        ],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    default=str,
+                ),
+            )
+        elif not cache_hit:
             logger.info(
                 "[ToolDiscovery] deferred tool routing | candidate_count=%s | backend=%s | matched=%s",
                 len(candidates),
@@ -481,16 +525,80 @@ class ProgressiveToolRail(DeepAgentRail):
         for message in reversed(messages):
             if not isinstance(message, UserMessage):
                 continue
-            content = getattr(message, "content", "")
-            if isinstance(content, str):
-                return content.strip()
-            if isinstance(content, list):
-                return "\n".join(
-                    str(item.get("text", "")) if isinstance(item, dict) else str(item)
-                    for item in content
-                    if isinstance(item, (str, dict))
-                ).strip()
+            content, _ = ProgressiveToolRail._clean_jev_user_content(
+                getattr(message, "content", "")
+            )
+            if content:
+                return content
         return ""
+
+    @staticmethod
+    def _clean_jev_user_content(raw_content: Any) -> tuple[str, bool]:
+        """Strip JiuwenSwarm transport envelopes and injected system reminders."""
+        if isinstance(raw_content, str):
+            content = raw_content
+        elif isinstance(raw_content, list):
+            content = "\n".join(
+                part if isinstance(part, str) else part["text"]
+                for part in raw_content
+                if isinstance(part, str)
+                or (isinstance(part, dict) and isinstance(part.get("text"), str))
+            )
+        else:
+            return "", False
+
+        was_wrapped = False
+        stripped = content.strip()
+        if stripped.startswith(_JIUWENSWARM_USER_MESSAGE_PREFIX):
+            payload = stripped[len(_JIUWENSWARM_USER_MESSAGE_PREFIX):].strip()
+            try:
+                envelope = json.loads(payload)
+            except (TypeError, ValueError):
+                envelope = None
+            if (
+                isinstance(envelope, dict)
+                and envelope.get("type") == "user input"
+                and isinstance(envelope.get("content"), str)
+            ):
+                content = envelope["content"]
+                was_wrapped = True
+
+        content = re.sub(
+            r"<system-reminder>.*?</system-reminder>",
+            "",
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        ).strip()
+        return content, was_wrapped
+
+    @staticmethod
+    def _conversation_context(inputs: Any) -> List[Dict[str, Any]]:
+        """Return user dialog for the JEV router.
+
+        System instructions and message metadata are intentionally omitted;
+        the router needs conversation context, not the agent's private prompt.
+        Reasoning content and non-text multimodal payloads are also excluded.
+        """
+        conversation: List[Dict[str, Any]] = []
+        messages = getattr(inputs, "messages", None) or []
+        for message in messages:
+            role = str(getattr(message, "role", "") or "").strip().lower()
+            if role != "user":
+                continue
+
+            content, was_wrapped = ProgressiveToolRail._clean_jev_user_content(
+                getattr(message, "content", "")
+            )
+            if not content:
+                continue
+            if (
+                was_wrapped
+                and conversation
+                and conversation[-1]["content"] == content
+            ):
+                continue
+            conversation.append({"role": role, "content": content})
+        return conversation
 
     @staticmethod
     def _user_message_count(inputs: Any) -> int:

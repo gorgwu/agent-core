@@ -18,16 +18,20 @@ default and is also the failure fallback for automatic discovery.
 
 ## Decisions
 
-- Run retrieval at `ProgressiveToolRail.before_model_call` using the latest user
-  message and current deferred `ToolInfo` inventory. Cache the result for that
+- Run retrieval at `ProgressiveToolRail.before_model_call` using the active
+  user-message history, the latest user message, and current deferred
+  `ToolInfo` inventory. Send only user text as conversation state; omit system
+  messages, assistant messages, tool results, metadata, and non-text multimodal
+  payloads. Cache the result for that
   user-message count so further ReAct iterations reuse it without another discovery
   request or duplicate discovery log; the next user message triggers discovery.
-- Send user text in `state` and one or more typed `choice` questions. Each
-  question offers locally generated keys mapped to current tool records, plus a
-  no-match choice. Choice groups contain no more than 255 total options.
-- Rank registered tools from the response scores, discard zero-score results,
-  and expose up to `tool_discovery_max_tools` candidates
-  (default and maximum 10). Only keys included in the request map to registered
+- Send the latest user text and active conversation in `state`, along with one
+  or more typed `choice` questions. Each question offers locally generated keys
+  mapped to current tool records, plus a no-match choice. Choice groups contain
+  no more than 255 total options.
+- Rank registered tools from the response scores, keep scores strictly greater
+  than `tool_discovery_min_score` (default `0.01`), and expose up to
+  `tool_discovery_max_tools` candidates (default and maximum 10). Only keys included in the request map to registered
   tools; the no-match option is never exposed. If a group selects the no-match
   option, suppress every real-tool candidate from that group.
 - Authorize selected tools through the existing session name/fingerprint state
@@ -35,7 +39,9 @@ default and is also the failure fallback for automatic discovery.
   remains the existing `tool_call` → `AbilityManager.execute()` path.
 - Configure `tool_discovery_backend` as `bm25` (default) or `jev`.
   `tool_discovery_model` is passed as the model ID to the System 1 endpoint;
-  `tool_discovery_max_tools` caps results.
+  `tool_discovery_max_tools` caps results and `tool_discovery_min_score` is the
+  configurable strict score floor. Set the floor to `0.0` to retain all positive
+  scores, or `0.05` to keep only scores greater than `0.05`.
 - JEV discovery uses a System 1 tool-selection API, not a chat-completions API.
   `TOOL_DISCOVERY_API_KEY` is sent as a Bearer credential. The optional
   `TOOL_DISCOVERY_API_BASE` is the full endpoint URL. Its service must accept the
@@ -54,7 +60,10 @@ default and is also the failure fallback for automatic discovery.
   trigger fallback.
   Select the `bm25` backend to use `tool_search` as the primary discovery mechanism.
 - Record selected tool names and their probabilities in the discovery trace and
-  debug log so a developer can inspect the retrieval result.
+  one debug log record so a developer can inspect the retrieval result. That
+  record contains a timestamp, deferred candidate count, user prompt, user-message
+  context sent to JEV, selected tool names, and their scores; it omits candidate
+  choice descriptions.
 
 ## Rejected Alternatives
 

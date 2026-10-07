@@ -40,6 +40,7 @@ def _choice_request(
     query: str,
     tools: List[Any],
     model: str,
+    conversation: List[Dict[str, Any]] | None = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Build one typed Choice per bounded group and retain local key mappings."""
     questions: Dict[str, Any] = {}
@@ -65,9 +66,13 @@ def _choice_request(
             "criteria": criteria,
         }
 
+    state: Dict[str, Any] = {"user_request": query}
+    if conversation:
+        state["conversation"] = conversation
+
     request = {
         "model": model,
-        "state": {"user_request": query},
+        "state": state,
         "questions": questions,
     }
     return request, key_to_tool
@@ -93,10 +98,12 @@ async def rank_decisions_api_tools(
     *,
     query: str,
     tools: List[Any],
+    conversation: List[Dict[str, Any]] | None = None,
     model: str = "typesafe/jev-1.13",
     api_key: str | None = None,
     api_base: str | None = None,
-    max_tools: int = 5,
+    max_tools: int = 10,
+    min_score: float = 0.01,
     request_timeout: float = 15.0,
 ) -> List[ScoredTool]:
     """Return the highest-scoring registered tools selected by JEV.
@@ -109,7 +116,10 @@ async def rank_decisions_api_tools(
     """
     if not query.strip() or not tools:
         return []
-    max_tools = max(1, int(max_tools))
+    max_tools = min(10, max(1, int(max_tools)))
+    min_score = float(min_score)
+    if not math.isfinite(min_score) or not 0.0 <= min_score <= 1.0:
+        raise ValueError("min_score must be a finite number between 0 and 1")
     # Load a project-local .env on demand so users can configure discovery without
     # adding dotenv setup code to every application entrypoint.
     load_dotenv(override=False)
@@ -122,7 +132,12 @@ async def rank_decisions_api_tools(
         or os.getenv(_API_BASE_ENV)
         or _DECISIONS_URL
     )
-    request, key_to_tool = _choice_request(query=query, tools=tools, model=model)
+    request, key_to_tool = _choice_request(
+        query=query,
+        tools=tools,
+        model=model,
+        conversation=conversation,
+    )
     response = await asyncio.to_thread(
         _post_decisions, request, token, request_timeout, endpoint
     )
@@ -195,7 +210,7 @@ async def rank_decisions_api_tools(
                     scored[name] = ScoredTool(tool=tool, score=confidence)
 
     ranked = sorted(
-        (item for item in scored.values() if item.score > 0.0),
+        (item for item in scored.values() if item.score > min_score),
         key=lambda item: (-item.score, str(item.tool.name)),
     )
     return ranked[:max_tools]
@@ -205,20 +220,24 @@ async def select_deferred_tools(
     *,
     query: str,
     tools: List[Any],
+    conversation: List[Dict[str, Any]] | None = None,
     model: str = "typesafe/jev-1.13",
     api_key: str | None = None,
     api_base: str | None = None,
-    max_tools: int = 5,
+    max_tools: int = 10,
+    min_score: float = 0.01,
     request_timeout: float = 15.0,
 ) -> List[Any]:
     """Return the tools in the top JEV relevance scores."""
     ranked = await rank_decisions_api_tools(
         query=query,
         tools=tools,
+        conversation=conversation,
         model=model,
         api_key=api_key,
         api_base=api_base,
         max_tools=max_tools,
+        min_score=min_score,
         request_timeout=request_timeout,
     )
     return [item.tool for item in ranked]
