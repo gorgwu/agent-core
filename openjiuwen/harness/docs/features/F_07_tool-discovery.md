@@ -5,16 +5,16 @@
 | Item | Value |
 | --- | --- |
 | Date | 2026-10-01 |
-| Scope | BM25 and JEV System 1 tool selection for deferred tools |
+| Scope | BM25 and System 1 tool selection for deferred tools |
 | Specs | S_05 |
 | Baseline | Existing BM25 `tool_search` and fixed `tool_call` contract tests |
 | Refs | None |
 
 ## Background
 
-Tool discovery selects relevant deferred tools before the main model call. It can use
-a compatible System 1 tool-selection endpoint with a JEV model. BM25 remains the
-default and is also the failure fallback for automatic discovery.
+Tool discovery selects relevant deferred tools before the main model call. It can
+use a compatible System 1 tool-selection endpoint with a supported model. BM25
+remains the default and is also the failure fallback for automatic discovery.
 
 ## Decisions
 
@@ -37,33 +37,35 @@ default and is also the failure fallback for automatic discovery.
 - Authorize selected tools through the existing session name/fingerprint state
   and show their full parameter schemas in a prompt section. Tool execution
   remains the existing `tool_call` → `AbilityManager.execute()` path.
-- Configure `tool_discovery_backend` as `bm25` (default) or `jev`.
+- Configure `tool_discovery_backend` as `bm25` (default) or `jev` to select System 1
+  routing.
   `tool_discovery_model` is passed as the model ID to the System 1 endpoint;
   `tool_discovery_max_tools` caps results and `tool_discovery_min_score` is the
   configurable strict score floor. Set the floor to `0.0` to retain all positive
   scores, or `0.05` to keep only scores greater than `0.05`.
-- JEV discovery uses a System 1 tool-selection API, not a chat-completions API.
+- System 1 discovery uses a tool-selection API, not a chat-completions API.
   `TOOL_DISCOVERY_API_KEY` is sent as a Bearer credential. The optional
   `TOOL_DISCOVERY_API_BASE` is the full endpoint URL. Its service must accept the
   typed request (`model`, `state`, and `questions` containing `choice` criteria)
   and return an `answers` object with choice probabilities or a selected choice
   and confidence. A ChatGPT model ID or ordinary chat-completions URL alone is
-  not sufficient; a compatible System 1 endpoint may route to any supported model.
-- In JEV mode, expose `tool_call` and only the selected deferred tools; hide
-  `tool_search`. At rail startup, check whether a JEV credential is present. If
-  it is missing, use model-directed BM25 search without attempting JEV. If the
-  first JEV request fails, disable JEV for that rail instance and switch to the
-  normal BM25 `tool_search` workflow for subsequent turns. The model chooses
-  its own search queries; the rail does not automatically select BM25 results.
-  Restart the app/agent after fixing the credential or endpoint to try JEV again.
-  A successful JEV response with no positive matches remains empty and does not
-  trigger fallback.
-  Select the `bm25` backend to use `tool_search` as the primary discovery mechanism.
+  not sufficient; a compatible System 1 endpoint may route to any supported
+  model.
+- In System 1 mode, expose `tool_call` and only the selected deferred tools; hide
+  `tool_search`. At rail startup, check whether `TOOL_DISCOVERY_API_KEY` is
+  present. If it is missing, use model-directed BM25 search without attempting
+  System 1. If the first request fails, disable System 1 for that rail instance
+  and switch to the normal BM25 `tool_search` workflow for subsequent turns. The
+  model chooses its own search queries; the rail does not automatically select
+  BM25 results. Restart the app/agent after fixing the credential or endpoint to
+  try System 1 again. A successful System 1 response with no positive matches
+  remains empty and does not trigger fallback. Select the `bm25` backend to use
+  `tool_search` as the primary discovery mechanism.
 - Record selected tool names and their probabilities in the discovery trace and
   one debug log record so a developer can inspect the retrieval result. That
   record contains a timestamp, deferred candidate count, user prompt, user-message
-  context sent to JEV, selected tool names, and their scores; it omits candidate
-  choice descriptions.
+  context sent to System 1, selected tool names, and their scores; it omits
+  candidate choice descriptions.
 
 ## Rejected Alternatives
 

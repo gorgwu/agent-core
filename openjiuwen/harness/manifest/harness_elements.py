@@ -111,23 +111,23 @@ class ProgressiveToolInput(ConstructionInput):
     )
     tool_discovery_api_key: str | None = param_field(
         default=None,
-        description="Optional API key for the JEV tool-discovery endpoint.",
+        description="Optional API key for the System 1 tool-discovery endpoint.",
     )
     tool_discovery_api_base: str | None = param_field(
         default=None,
-        description="Optional full URL for a compatible JEV Decisions API endpoint.",
+        description="Optional full URL for a compatible System 1 tool-selection endpoint.",
     )
     tool_discovery_model: str = param_field(
         default="typesafe/jev-1.13",
-        description="Model ID sent to the JEV Decisions API.",
+        description="Model ID sent to the System 1 tool-selection endpoint.",
     )
     tool_discovery_max_tools: int = param_field(
         default=10,
-        description="Maximum number of deferred tools selected by JEV (capped at 10).",
+        description="Maximum number of deferred tools selected by System 1 (capped at 10).",
     )
     tool_discovery_min_score: float = param_field(
         default=0.01,
-        description="Minimum JEV score; returned tools must score strictly higher.",
+        description="Minimum System 1 score; returned tools must score strictly higher.",
     )
 
 
