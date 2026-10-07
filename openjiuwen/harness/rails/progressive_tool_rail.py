@@ -313,21 +313,44 @@ class ProgressiveToolRail(DeepAgentRail):
         ability_manager = getattr(agent, "ability_manager", None) or self._tool_search_registry
         list_abilities = getattr(ability_manager, "list", None)
         if not callable(list_abilities):
+            if getattr(self._config, "tool_search_tool_ids", None) is not None:
+                raise RuntimeError(
+                    "tool_search_tool_ids requires an AbilityManager that can list cards"
+                )
             return []
 
+        configured_tool_ids = getattr(self._config, "tool_search_tool_ids", None)
+        allowed_tool_ids = (
+            None
+            if configured_tool_ids is None
+            else {str(tool_id) for tool_id in configured_tool_ids}
+        )
+
         documents: List[ToolInfo] = []
+        found_tool_ids: Set[str] = set()
         try:
             abilities = list_abilities() or []
         except Exception as exc:
+            if allowed_tool_ids is not None:
+                raise RuntimeError(
+                    "Could not list registered tools for the configured BM25 catalog"
+                ) from exc
             logger.warning(
                 f"[ProgressiveToolRail] failed to list registered cards for BM25: {exc}"
             )
             return []
         if not isinstance(abilities, (list, tuple)):
+            if allowed_tool_ids is not None:
+                raise RuntimeError(
+                    "Could not list registered tools for the configured BM25 catalog"
+                )
             return []
 
         for card in abilities:
             if not isinstance(card, ToolCard):
+                continue
+            card_id = str(getattr(card, "id", "") or "")
+            if allowed_tool_ids is not None and card_id not in allowed_tool_ids:
                 continue
             if str(getattr(card, "name", "") or "") in self._meta_tool_names:
                 continue
@@ -338,12 +361,21 @@ class ProgressiveToolRail(DeepAgentRail):
 
             try:
                 documents.append(card.tool_info())
+                found_tool_ids.add(card_id)
             except Exception as exc:
                 logger.warning(
                     "[ProgressiveToolRail] failed to convert deferred card '%s' "
                     "to ToolInfo: %s",
                     getattr(card, "name", ""),
                     exc,
+                )
+        if allowed_tool_ids is not None:
+            missing_tool_ids = allowed_tool_ids - found_tool_ids
+            if missing_tool_ids:
+                preview = ", ".join(sorted(missing_tool_ids)[:5])
+                raise RuntimeError(
+                    f"BM25 catalog is missing {len(missing_tool_ids)} configured tool "
+                    f"IDs (for example: {preview})"
                 )
         return documents
 
@@ -370,6 +402,11 @@ class ProgressiveToolRail(DeepAgentRail):
         )
         if callable(getattr(ability_manager, "list", None)):
             return self._list_registered_deferred_tool_infos(agent)
+
+        if getattr(self._config, "tool_search_tool_ids", None) is not None:
+            raise RuntimeError(
+                "tool_search_tool_ids requires an AbilityManager that can list cards"
+            )
 
         return [
             tool

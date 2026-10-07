@@ -286,6 +286,9 @@ class DeepAgentConfig:
     # Default result count for tool_search; the model may override it with limit.
     # The effective value is clamped to 1..20.
     tool_search_limit: int = 5
+    # Optional catalog scope for benchmark or tenant-isolated BM25 search.
+    # None preserves the default behavior of indexing every deferred tool.
+    tool_search_tool_ids: Optional[List[str]] = None
 
     # Plan mode config
     default_mode: AgentMode = AgentMode.NORMAL
