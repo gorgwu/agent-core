@@ -41,11 +41,12 @@ def _choice_request(
     tools: List[Any],
     model: str,
     conversation: List[Dict[str, Any]] | None = None,
+    include_no_tool: bool = True,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Build one typed Choice per bounded group and retain local key mappings."""
     questions: Dict[str, Any] = {}
     key_to_tool: Dict[str, Any] = {}
-    chunk_size = _MAX_CHOICE_OPTIONS - 1  # reserve one option for no match
+    chunk_size = _MAX_CHOICE_OPTIONS - int(include_no_tool)
 
     for group_index, offset in enumerate(range(0, len(tools), chunk_size)):
         question_id = f"tool_group_{group_index:04d}"
@@ -56,12 +57,17 @@ def _choice_request(
             description = str(getattr(tool, "description", "") or "")
             criteria[option_key] = f"{name}: {description}".strip()
             key_to_tool[option_key] = tool
-        criteria[_NO_TOOL_KEY] = "No tool in this group can perform the requested operation."
+        if include_no_tool:
+            criteria[_NO_TOOL_KEY] = "No tool in this group can perform the requested operation."
         questions[question_id] = {
             "type": "choice",
             "instructions": (
                 "Which deferred tool in this group best enables the user request? "
-                "Choose no_relevant_tool if none is relevant."
+                + (
+                    "Choose no_relevant_tool if none is relevant."
+                    if include_no_tool
+                    else "Choose the best matching deferred tool."
+                )
             ),
             "criteria": criteria,
         }
@@ -104,6 +110,7 @@ async def rank_decisions_api_tools(
     api_base: str | None = None,
     max_tools: int = 10,
     min_score: float = 0.01,
+    include_no_tool: bool = True,
     request_timeout: float = 15.0,
 ) -> List[ScoredTool]:
     """Return the highest-scoring registered tools selected by JEV.
@@ -137,6 +144,7 @@ async def rank_decisions_api_tools(
         tools=tools,
         model=model,
         conversation=conversation,
+        include_no_tool=include_no_tool,
     )
     response = await asyncio.to_thread(
         _post_decisions, request, token, request_timeout, endpoint
@@ -153,13 +161,13 @@ async def rank_decisions_api_tools(
         # The explicit typed choice is the per-group decision. In particular,
         # a no-match decision vetoes lower-probability tool candidates from the
         # same group; those candidates must not reach the prompt or auth state.
-        if choice == _NO_TOOL_KEY:
+        if include_no_tool and choice == _NO_TOOL_KEY:
             continue
 
         # Some compatible endpoints omit ``choice`` but return probabilities.
         # In that shape, treat no-match as a veto when it scores at least as
         # highly as every real tool in this group.
-        if choice not in key_to_tool and _NO_TOOL_KEY in probabilities:
+        if include_no_tool and choice not in key_to_tool and _NO_TOOL_KEY in probabilities:
             try:
                 no_match_score = float(probabilities[_NO_TOOL_KEY])
             except (TypeError, ValueError):
@@ -226,6 +234,7 @@ async def select_deferred_tools(
     api_base: str | None = None,
     max_tools: int = 10,
     min_score: float = 0.01,
+    include_no_tool: bool = True,
     request_timeout: float = 15.0,
 ) -> List[Any]:
     """Return the tools in the top JEV relevance scores."""
@@ -238,6 +247,7 @@ async def select_deferred_tools(
         api_base=api_base,
         max_tools=max_tools,
         min_score=min_score,
+        include_no_tool=include_no_tool,
         request_timeout=request_timeout,
     )
     return [item.tool for item in ranked]

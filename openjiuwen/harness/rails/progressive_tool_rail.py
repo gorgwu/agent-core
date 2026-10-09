@@ -426,6 +426,9 @@ class ProgressiveToolRail(DeepAgentRail):
                     api_base=getattr(self._config, "tool_discovery_api_base", None),
                     max_tools=max_tools,
                     min_score=min_score,
+                    include_no_tool=bool(
+                        getattr(self._config, "tool_discovery_include_no_tool", True)
+                    ),
                 )
                 selected = [item.tool for item in ranked]
                 scores = {str(item.tool.name): item.score for item in ranked}
