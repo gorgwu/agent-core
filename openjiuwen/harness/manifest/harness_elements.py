@@ -126,8 +126,8 @@ class ProgressiveToolInput(ConstructionInput):
         description="Maximum number of deferred tools selected by System 1 (capped at 10).",
     )
     tool_discovery_min_score: float = param_field(
-        default=0.01,
-        description="Minimum System 1 score; returned tools must score strictly higher.",
+        default=0.0,
+        description="Minimum System 1 score; returned tools must meet or exceed this score.",
     )
 
 
@@ -150,9 +150,9 @@ def _build_progressive_tool_rail(params: dict[str, Any], context: Any) -> Progre
     try:
         min_score = float(inputs.tool_discovery_min_score)
     except (TypeError, ValueError):
-        min_score = 0.01
+        min_score = 0.0
     if not math.isfinite(min_score):
-        min_score = 0.01
+        min_score = 0.0
     config.tool_discovery_min_score = min(1.0, max(0.0, min_score))
     return ProgressiveToolRail(config)
 

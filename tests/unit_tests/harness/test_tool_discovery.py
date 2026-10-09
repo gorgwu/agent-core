@@ -134,7 +134,7 @@ async def test_decisions_request_returns_top_scored_tools(monkeypatch):
     question = body["questions"]["tool_group_0000"]
     assert question["type"] == "choice"
     assert question["criteria"]["tool_000000"] == "calendar_create: Create calendar events"
-    assert "no_relevant_tool" in question["criteria"]
+    assert "no_relevant_tool" not in question["criteria"]
 
 
 @pytest.mark.asyncio
@@ -157,14 +157,14 @@ async def test_uses_configured_decisions_api_base(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_discards_zero_scores_and_caps_at_configured_max(monkeypatch):
+async def test_keeps_zero_scores_and_caps_at_configured_max(monkeypatch):
     tools = [ToolInfo(name=f"tool_{i}", description="candidate") for i in range(12)]
 
     def post(_url, *, json, **_kwargs):
         return _Response({"answers": {"tool_group_0000": {
             "type": "choice",
             "probabilities": {
-                f"tool_{i:06d}": (0.0 if i == 0 else 0.1)
+                f"tool_{i:06d}": 0.0
                 for i in range(12)
             },
         }}})
@@ -175,10 +175,8 @@ async def test_discards_zero_scores_and_caps_at_configured_max(monkeypatch):
     )
 
     assert len(result) == 10
-    assert tools[0] not in result
-    assert {tool.name for tool in result} == {
-        f"tool_{i}" for i in range(1, 12)
-    } - {"tool_9"}
+    assert tools[0] in result
+    assert len(result) == 10
 
 
 @pytest.mark.asyncio

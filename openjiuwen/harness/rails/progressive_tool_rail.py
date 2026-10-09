@@ -375,11 +375,11 @@ class ProgressiveToolRail(DeepAgentRail):
             max(1, int(getattr(self._config, "tool_discovery_max_tools", 10))),
         )
         try:
-            min_score = float(getattr(self._config, "tool_discovery_min_score", 0.01))
+            min_score = float(getattr(self._config, "tool_discovery_min_score", 0.0))
         except (TypeError, ValueError):
-            min_score = 0.01
+            min_score = 0.0
         if not math.isfinite(min_score):
-            min_score = 0.01
+            min_score = 0.0
         min_score = min(1.0, max(0.0, min_score))
         turn_index = self._user_message_count(getattr(ctx, "inputs", None))
         previous = session.get_state(_TOOL_DISCOVERY_STATE_KEY) if session is not None else None

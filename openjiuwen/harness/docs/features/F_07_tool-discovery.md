@@ -27,13 +27,13 @@ remains the default and is also the failure fallback for automatic discovery.
   request or duplicate discovery log; the next user message triggers discovery.
 - Send the latest user text and active conversation in `state`, along with one
   or more typed `choice` questions. Each question offers locally generated keys
-  mapped to current tool records, plus a no-match choice. Choice groups contain
-  no more than 255 total options.
-- Rank registered tools from the response scores, keep scores strictly greater
-  than `tool_discovery_min_score` (default `0.01`), and expose up to
-  `tool_discovery_max_tools` candidates (default and maximum 10). Only keys included in the request map to registered
-  tools; the no-match option is never exposed. If a group selects the no-match
-  option, suppress every real-tool candidate from that group.
+  mapped to current tool records. There is no no-tool choice. Choice groups
+  contain no more than 255 total options.
+- Rank registered tools from the response scores, keep scores greater than or
+  equal to `tool_discovery_min_score` (default `0.00`), and expose up to
+  `tool_discovery_max_tools` candidates (default and maximum 10). Only keys
+  included in the request map to registered tools; only requested tool options
+  can be selected.
 - Authorize selected tools through the existing session name/fingerprint state
   and show their full parameter schemas in a prompt section. Tool execution
   remains the existing `tool_call` → `AbilityManager.execute()` path.
@@ -41,8 +41,8 @@ remains the default and is also the failure fallback for automatic discovery.
   routing.
   `tool_discovery_model` is passed as the model ID to the System 1 endpoint;
   `tool_discovery_max_tools` caps results and `tool_discovery_min_score` is the
-  configurable strict score floor. Set the floor to `0.0` to retain all positive
-  scores, or `0.05` to keep only scores greater than `0.05`.
+  configurable inclusive score floor. Set the floor to `0.00` to retain zero
+  and positive scores, or `0.05` to keep scores of at least `0.05`.
 - System 1 discovery uses a tool-selection API, not a chat-completions API.
   `TOOL_DISCOVERY_API_KEY` is sent as a Bearer credential. The optional
   `TOOL_DISCOVERY_API_BASE` is the full endpoint URL. Its service must accept the
@@ -58,7 +58,7 @@ remains the default and is also the failure fallback for automatic discovery.
   and switch to the normal BM25 `tool_search` workflow for subsequent turns. The
   model chooses its own search queries; the rail does not automatically select
   BM25 results. Restart the app/agent after fixing the credential or endpoint to
-  try System 1 again. A successful System 1 response with no positive matches
+  try System 1 again. A successful System 1 response with no usable tool scores
   remains empty and does not trigger fallback. Select the `bm25` backend to use
   `tool_search` as the primary discovery mechanism.
 - Record selected tool names and their probabilities in the discovery trace and
@@ -77,4 +77,4 @@ remains the default and is also the failure fallback for automatic discovery.
 
 Unit tests cover typed request construction, custom endpoint selection, local
 key mapping, grouped option ceiling, score filtering, automatic prompt exposure,
-model-directed search after API failure, and valid no-match behavior.
+model-directed search after API failure, and empty-result handling.

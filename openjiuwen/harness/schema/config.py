@@ -291,7 +291,7 @@ class DeepAgentConfig:
     tool_discovery_api_base: Optional[str] = None
     tool_discovery_model: str = "typesafe/jev-1.13"
     tool_discovery_max_tools: int = 10
-    tool_discovery_min_score: float = 0.01
+    tool_discovery_min_score: float = 0.0
 
     # Plan mode config
     default_mode: AgentMode = AgentMode.NORMAL

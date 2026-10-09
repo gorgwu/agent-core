@@ -18,7 +18,6 @@ _DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 _API_KEY_ENV = "TOOL_DISCOVERY_API_KEY"
 _API_BASE_ENV = "TOOL_DISCOVERY_API_BASE"
 _MAX_CHOICE_OPTIONS = 255
-_NO_TOOL_KEY = "no_relevant_tool"
 
 
 def has_decisions_api_key(api_key: str | None = None) -> bool:
@@ -45,7 +44,7 @@ def _choice_request(
     """Build one typed Choice per bounded group and retain local key mappings."""
     questions: Dict[str, Any] = {}
     key_to_tool: Dict[str, Any] = {}
-    chunk_size = _MAX_CHOICE_OPTIONS - 1  # reserve one option for no match
+    chunk_size = _MAX_CHOICE_OPTIONS
 
     for group_index, offset in enumerate(range(0, len(tools), chunk_size)):
         question_id = f"tool_group_{group_index:04d}"
@@ -56,13 +55,9 @@ def _choice_request(
             description = str(getattr(tool, "description", "") or "")
             criteria[option_key] = f"{name}: {description}".strip()
             key_to_tool[option_key] = tool
-        criteria[_NO_TOOL_KEY] = "No tool in this group can perform the requested operation."
         questions[question_id] = {
             "type": "choice",
-            "instructions": (
-                "Which deferred tool in this group best enables the user request? "
-                "Choose no_relevant_tool if none is relevant."
-            ),
+            "instructions": "Which deferred tool in this group best enables the user request? Choose the most relevant tool.",
             "criteria": criteria,
         }
 
@@ -103,7 +98,7 @@ async def rank_decisions_api_tools(
     api_key: str | None = None,
     api_base: str | None = None,
     max_tools: int = 10,
-    min_score: float = 0.01,
+    min_score: float = 0.0,
     request_timeout: float = 15.0,
 ) -> List[ScoredTool]:
     """Return the highest-scoring registered tools selected by JEV.
@@ -111,8 +106,8 @@ async def rank_decisions_api_tools(
     Option keys are generated locally and mapped back to the original ToolInfo;
     names emitted outside those keys are never accepted as tool identities.
     Scores from each typed Choice probability distribution are ranked globally,
-    and at most ``max_tools`` candidates are returned. The no-tool option is
-    never exposed as a tool.
+    and at most ``max_tools`` candidates are returned. The Choice request
+    contains only registered tools, so the router must select a tool.
     """
     if not query.strip() or not tools:
         return []
@@ -150,40 +145,8 @@ async def rank_decisions_api_tools(
         if not isinstance(probabilities, dict):
             probabilities = {}
         choice = answer.get("choice")
-        # The explicit typed choice is the per-group decision. In particular,
-        # a no-match decision vetoes lower-probability tool candidates from the
-        # same group; those candidates must not reach the prompt or auth state.
-        if choice == _NO_TOOL_KEY:
-            continue
-
-        # Some compatible endpoints omit ``choice`` but return probabilities.
-        # In that shape, treat no-match as a veto when it scores at least as
-        # highly as every real tool in this group.
-        if choice not in key_to_tool and _NO_TOOL_KEY in probabilities:
-            try:
-                no_match_score = float(probabilities[_NO_TOOL_KEY])
-            except (TypeError, ValueError):
-                no_match_score = -1.0
-            tool_scores = []
-            for key, probability in probabilities.items():
-                if key not in key_to_tool:
-                    continue
-                try:
-                    score = float(probability)
-                except (TypeError, ValueError):
-                    continue
-                if math.isfinite(score) and 0.0 <= score <= 1.0:
-                    tool_scores.append(score)
-            if (
-                math.isfinite(no_match_score)
-                and 0.0 <= no_match_score <= 1.0
-                and tool_scores
-                and no_match_score >= max(tool_scores)
-            ):
-                continue
-
         for key, probability in probabilities.items():
-            if key == _NO_TOOL_KEY or key not in key_to_tool:
+            if key not in key_to_tool:
                 continue
             try:
                 score = float(probability)
@@ -210,7 +173,7 @@ async def rank_decisions_api_tools(
                     scored[name] = ScoredTool(tool=tool, score=confidence)
 
     ranked = sorted(
-        (item for item in scored.values() if item.score > min_score),
+        (item for item in scored.values() if item.score >= min_score),
         key=lambda item: (-item.score, str(item.tool.name)),
     )
     return ranked[:max_tools]
@@ -225,7 +188,7 @@ async def select_deferred_tools(
     api_key: str | None = None,
     api_base: str | None = None,
     max_tools: int = 10,
-    min_score: float = 0.01,
+    min_score: float = 0.0,
     request_timeout: float = 15.0,
 ) -> List[Any]:
     """Return the tools in the top JEV relevance scores."""
