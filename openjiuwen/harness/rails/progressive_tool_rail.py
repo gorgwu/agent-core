@@ -462,6 +462,9 @@ class ProgressiveToolRail(DeepAgentRail):
         else:
             conversation = self._conversation_context(getattr(ctx, "inputs", None))
             try:
+                include_no_tool = bool(
+                    getattr(self._config, "tool_discovery_include_no_tool", True)
+                )
                 ranked = await rank_decisions_api_tools(
                     query=query,
                     tools=candidates,
@@ -471,10 +474,11 @@ class ProgressiveToolRail(DeepAgentRail):
                     api_base=getattr(self._config, "tool_discovery_api_base", None),
                     max_tools=max_tools,
                     min_score=min_score,
+                    include_no_tool=include_no_tool,
                 )
                 selected = [item.tool for item in ranked]
                 scores = {str(item.tool.name): item.score for item in ranked}
-                if not selected:
+                if not selected and not include_no_tool:
                     # System One must not leave the agent without a usable tool
                     # when this runtime is configured for automatic discovery.
                     # Re-enter the regular BM25 tool_search flow instead.
