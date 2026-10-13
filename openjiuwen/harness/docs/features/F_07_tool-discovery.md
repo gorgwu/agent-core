@@ -37,9 +37,14 @@ remains the default and is also the failure fallback for automatic discovery.
 - Authorize selected tools through the existing session name/fingerprint state
   and show their full parameter schemas in a prompt section. Tool execution
   remains the existing `tool_call` → `AbilityManager.execute()` path.
-- Configure `tool_discovery_backend` as `bm25` (default) or `jev` to select System 1
-  routing.
+- Configure `tool_discovery_backend` as `bm25` (default), `jev` (hosted System 1),
+  or `local` (a self-hosted System 1-compatible endpoint) to select routing.
   `tool_discovery_model` is passed as the model ID to the System 1 endpoint;
+  `tool_discovery_api_base` and `tool_discovery_api_key` are shared by both
+  `jev` and `local`. The `local` backend requires an explicit endpoint URL so it
+  cannot silently send requests to the hosted Jev service. Local adapters such
+  as Kev or Valen receive the same state, user query, conversation context, and
+  deferred-tool choices through the System 1 request schema;
   `tool_discovery_max_tools` caps results and `tool_discovery_min_score` is the
   configurable strict score floor. Set the floor to `0.0` to retain all positive
   scores, or `0.05` to keep only scores greater than `0.05`.

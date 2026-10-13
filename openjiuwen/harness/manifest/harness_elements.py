@@ -107,15 +107,18 @@ class ProgressiveToolInput(ConstructionInput):
     )
     tool_discovery_backend: str = param_field(
         default="bm25",
-        description="Deferred-tool discovery backend: bm25 or jev.",
+        description=(
+            "Deferred-tool discovery backend: bm25, jev (hosted System 1), "
+            "or local (self-hosted System 1-compatible endpoint)."
+        ),
     )
     tool_discovery_api_key: str | None = param_field(
         default=None,
-        description="Optional API key for the System 1 tool-discovery endpoint.",
+        description="API key for the System 1 tool-discovery endpoint (hosted or local).",
     )
     tool_discovery_api_base: str | None = param_field(
         default=None,
-        description="Optional full URL for a compatible System 1 tool-selection endpoint.",
+        description="Full URL for a compatible System 1 endpoint; required when backend is local.",
     )
     tool_discovery_model: str = param_field(
         default="typesafe/jev-1.13",
