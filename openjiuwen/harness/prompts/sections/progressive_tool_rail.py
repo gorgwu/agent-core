@@ -190,7 +190,7 @@ def build_progressive_tool_rules_prompt(
     """
 
     lang = language if language in PROGRESSIVE_TOOL_RULES_HEADER else "cn"
-    if str(tool_discovery_backend or "bm25").strip().lower() == "jev":
+    if str(tool_discovery_backend or "bm25").strip().lower() in {"jev", "local"}:
         title = PROGRESSIVE_TOOL_RULES_HEADER[lang]
         if lang == "cn":
             return title + (

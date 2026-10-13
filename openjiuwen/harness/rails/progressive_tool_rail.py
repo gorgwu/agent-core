@@ -58,6 +58,7 @@ _DEFERRED_TOOL_REGISTRY_REVISION_METADATA_KEY = "registry_revision"
 _DEFERRED_TOOL_FULL_SNAPSHOT_INTERVAL = 10
 _NESTED_TOOL_CALL_KEY = "__progressive_nested_tool_call__"
 _JIUWENSWARM_USER_MESSAGE_PREFIX = "You receive a new message:"
+_AUTOMATIC_DISCOVERY_BACKENDS = frozenset({"jev", "local"})
 
 
 class ProgressiveToolRail(DeepAgentRail):
@@ -88,12 +89,40 @@ class ProgressiveToolRail(DeepAgentRail):
 
     def init(self, agent) -> None:
         """Register progressive meta tools to resource manager and ability manager."""
-        if str(
+        backend = str(
             getattr(self._config, "tool_discovery_backend", "bm25")
-        ).strip().lower() == "jev":
-            self._jev_disabled = not has_decisions_api_key(
-                getattr(self._config, "tool_discovery_api_key", None)
-            )
+        ).strip().lower()
+        if backend in _AUTOMATIC_DISCOVERY_BACKENDS:
+            try:
+                self._jev_disabled = not has_decisions_api_key(
+                    getattr(self._config, "tool_discovery_api_key", None)
+                )
+            except Exception as exc:
+                self._jev_disabled = True
+                logger.warning(
+                    "[ProgressiveToolRail] could not initialize System One "
+                    "discovery; falling back to model-directed BM25 tool_search: %s",
+                    exc,
+                )
+            local_api_base = str(
+                getattr(self._config, "tool_discovery_api_base", None) or ""
+            ).strip()
+            if backend == "local" and not local_api_base:
+                logger.warning(
+                    "[ProgressiveToolRail] local discovery requires "
+                    "tool_discovery_api_base; falling back to model-directed BM25 tool_search."
+                )
+                self._jev_disabled = True
+            elif backend == "local" and self._jev_disabled:
+                logger.warning(
+                    "[ProgressiveToolRail] local discovery requires "
+                    "tool_discovery_api_key; falling back to model-directed tool_search."
+                )
+            elif self._jev_disabled:
+                logger.warning(
+                    "[ProgressiveToolRail] System One discovery requires "
+                    "tool_discovery_api_key; falling back to model-directed BM25 tool_search."
+                )
         language = getattr(self._config, "language", "cn") or "cn"
         agent_id = getattr(getattr(agent, "card", None), "id", None)
 
@@ -226,13 +255,29 @@ class ProgressiveToolRail(DeepAgentRail):
             getattr(self._config, "tool_discovery_backend", "bm25")
         ).strip().lower()
         routed_tools: List[ToolInfo] = []
-        manual_search_fallback = backend == "jev" and self._jev_disabled
-        if backend == "jev" and not self._jev_disabled:
-            routed_tools, manual_search_fallback = await self._route_deferred_tools(ctx)
+        automatic_backend = backend in _AUTOMATIC_DISCOVERY_BACKENDS
+        manual_search_fallback = automatic_backend and self._jev_disabled
+        if automatic_backend and not self._jev_disabled:
+            try:
+                routed_tools, manual_search_fallback = await self._route_deferred_tools(ctx)
+            except Exception as exc:
+                routed_tools = []
+                manual_search_fallback = True
+                self._jev_disabled = True
+                logger.warning(
+                    "[ProgressiveToolRail] System One discovery backend %s failed; "
+                    "falling back to model-directed BM25 tool_search: %s",
+                    backend,
+                    exc,
+                )
             if manual_search_fallback:
                 self._jev_disabled = True
-        use_automatic_discovery = backend == "jev" and not manual_search_fallback
-        prompt_backend = "bm25" if manual_search_fallback else backend
+        use_automatic_discovery = automatic_backend and not manual_search_fallback
+        prompt_backend = (
+            "bm25"
+            if manual_search_fallback
+            else "jev" if automatic_backend else backend
+        )
 
         rules_section = self._build_progressive_tool_rules_section(
             deferred_tool_descriptions=initial_deferred_tools,
@@ -341,7 +386,7 @@ class ProgressiveToolRail(DeepAgentRail):
         self,
         ctx: AgentCallbackContext,
     ) -> tuple[List[ToolInfo], bool]:
-        """Select deferred tools for the latest user request."""
+        """Select deferred tools for the latest user request via System One."""
         backend = str(
             getattr(self._config, "tool_discovery_backend", "bm25")
         ).strip().lower()
@@ -429,17 +474,24 @@ class ProgressiveToolRail(DeepAgentRail):
                 )
                 selected = [item.tool for item in ranked]
                 scores = {str(item.tool.name): item.score for item in ranked}
+                if not selected:
+                    # System One must not leave the agent without a usable tool
+                    # when this runtime is configured for automatic discovery.
+                    # Re-enter the regular BM25 tool_search flow instead.
+                    raise RuntimeError(
+                        "System One returned no deferred tools; falling back to BM25 tool_search"
+                    )
             except Exception as exc:
                 fallback_error = str(exc)
                 selection_backend = "bm25_tool_search_fallback"
                 manual_search_fallback = True
                 self._jev_disabled = True
-                if backend != "jev":
-                    logger.warning(
-                        "[ProgressiveToolRail] discovery backend %s failed; enabling model-directed tool_search fallback: %s",
-                        backend,
-                        exc,
-                    )
+                logger.warning(
+                    "[ProgressiveToolRail] System One discovery backend %s failed; "
+                    "falling back to model-directed BM25 tool_search: %s",
+                    backend,
+                    exc,
+                )
                 selected = []
 
         selected_names = [str(tool.name) for tool in selected]
@@ -486,9 +538,9 @@ class ProgressiveToolRail(DeepAgentRail):
                     "fallback_error": fallback_error,
                 },
             )
-        if not cache_hit and backend == "jev":
+        if not cache_hit and backend in _AUTOMATIC_DISCOVERY_BACKENDS:
             logger.info(
-                "[ToolDiscovery] JEV routing: %s",
+                "[ToolDiscovery] System One routing: %s",
                 json.dumps(
                     {
                         "timestamp": datetime.now().astimezone().isoformat(
@@ -499,6 +551,7 @@ class ProgressiveToolRail(DeepAgentRail):
                         "max_tools": max_tools,
                         "min_score": min_score,
                         "user_prompt": query,
+                        "selection_context": conversation,
                         "jev_context": conversation,
                         "selected_tools": [
                             {"name": name, "score": scores.get(name)}
@@ -765,7 +818,7 @@ class ProgressiveToolRail(DeepAgentRail):
         limit: int = 5,
         session: Any = None,
     ) -> List[Dict[str, Any]]:
-        """Search BM25 unless JEV failure enabled model-directed fallback."""
+        """Search BM25 unless System One failure enabled model-directed fallback."""
         backend = str(
             getattr(self._config, "tool_discovery_backend", "bm25")
         ).strip().lower()
@@ -774,7 +827,7 @@ class ProgressiveToolRail(DeepAgentRail):
             if session is not None
             else None
         )
-        if backend == "jev" and not (
+        if backend in _AUTOMATIC_DISCOVERY_BACKENDS and not (
             self._jev_disabled
             or (
                 isinstance(discovery_state, dict)
@@ -782,7 +835,7 @@ class ProgressiveToolRail(DeepAgentRail):
             )
         ):
             raise RuntimeError(
-                "tool_search is disabled while JEV discovery is active."
+                "tool_search is disabled while JEV discovery is active or local System One discovery is active."
             )
 
         query = (query or "").strip().lower()

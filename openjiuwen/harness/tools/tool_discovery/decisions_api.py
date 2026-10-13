@@ -1,6 +1,6 @@
 # coding: utf-8
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""JEV Decisions API adapter used by automatic tool discovery."""
+"""System One Decisions API adapter used by automatic tool discovery."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ _MAX_CHOICE_OPTIONS = 255
 
 
 def has_decisions_api_key(api_key: str | None = None) -> bool:
-    """Load dotenv once at rail startup and report whether JEV credentials exist."""
+    """Load dotenv once at rail startup and report whether discovery credentials exist."""
     load_dotenv(override=False)
     return bool(str(api_key or os.getenv(_API_KEY_ENV) or "").strip())
 
@@ -120,7 +120,7 @@ async def rank_decisions_api_tools(
     load_dotenv(override=False)
     token = api_key or os.getenv(_API_KEY_ENV)
     if not token:
-        raise ValueError(f"{_API_KEY_ENV} is required for the JEV tool-discovery backend")
+        raise ValueError(f"{_API_KEY_ENV} is required for automatic tool discovery")
 
     endpoint = (
         api_base
