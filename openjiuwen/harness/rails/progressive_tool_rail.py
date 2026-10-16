@@ -86,6 +86,9 @@ class ProgressiveToolRail(DeepAgentRail):
         self._tool_search_index_revision: Optional[int] = None
         self._tool_search_registry: Any = None
         self._jev_disabled = False
+        # Optional observer used by benchmark adapters to record local router
+        # usage without changing normal application behavior.
+        self._usage_callback = None
 
     def init(self, agent) -> None:
         """Register progressive meta tools to resource manager and ability manager."""
@@ -473,6 +476,9 @@ class ProgressiveToolRail(DeepAgentRail):
                     min_score=min_score,
                     include_no_tool=bool(
                         getattr(self._config, "tool_discovery_include_no_tool", True)
+                    ),
+                    usage_callback=(
+                        self._usage_callback if backend == "local" else None
                     ),
                 )
                 selected = [item.tool for item in ranked]

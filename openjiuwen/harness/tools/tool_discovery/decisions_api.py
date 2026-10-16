@@ -8,7 +8,7 @@ import asyncio
 import math
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 import requests
 from dotenv import load_dotenv
@@ -120,6 +120,7 @@ async def rank_decisions_api_tools(
     request_timeout: float = 15.0,
     max_len: int | None = None,
     head_max_len: int | None = None,
+    usage_callback: Callable[[Dict[str, Any]], None] | None = None,
 ) -> List[ScoredTool]:
     """Return the highest-scoring registered tools selected by JEV.
 
@@ -159,6 +160,14 @@ async def rank_decisions_api_tools(
     response = await asyncio.to_thread(
         _post_decisions, request, token, request_timeout, endpoint
     )
+    if usage_callback is not None and isinstance(response.get("usage"), dict):
+        usage = dict(response["usage"])
+        usage.setdefault("model", response.get("model") or model)
+        try:
+            usage_callback(usage)
+        except Exception:
+            # Usage reporting is optional telemetry and must not break routing.
+            pass
     scored: Dict[str, ScoredTool] = {}
     for question_id in request["questions"]:
         answer = response["answers"].get(question_id)
