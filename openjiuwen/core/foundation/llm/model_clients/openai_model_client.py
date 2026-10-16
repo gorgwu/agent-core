@@ -1032,6 +1032,19 @@ class OpenAIModelClient(BaseModelClient):
         if self._endpoint_profile_name() != "openrouter":
             return
 
+        # OpenRouter can return its billed cost and cache details in usage.
+        # Request that metadata for the benchmark and other OpenRouter calls;
+        # the response parser already maps these fields into UsageMetadata.
+        extra_body = dict(params.get("extra_body") or {})
+        usage_options = extra_body.get("usage")
+        if isinstance(usage_options, dict):
+            usage_options = dict(usage_options)
+            usage_options.setdefault("include", True)
+        else:
+            usage_options = {"include": True}
+        extra_body["usage"] = usage_options
+        params["extra_body"] = extra_body
+
         model_name = params.get("model")
         if not self._enable_openrouter_explicit_caching:
             self._previous_openrouter_prompt_cache_messages = None

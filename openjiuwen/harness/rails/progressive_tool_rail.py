@@ -444,6 +444,7 @@ class ProgressiveToolRail(DeepAgentRail):
         selection_backend = backend
         fallback_error = ""
         manual_search_fallback = False
+        route_usage: dict[str, Any] | None = None
         conversation: List[Dict[str, Any]] = []
         by_name = {str(tool.name): tool for tool in candidates}
         if cache_hit:
@@ -465,6 +466,11 @@ class ProgressiveToolRail(DeepAgentRail):
                 include_no_tool = bool(
                     getattr(self._config, "tool_discovery_include_no_tool", True)
                 )
+
+                def capture_usage(usage: dict[str, Any]) -> None:
+                    nonlocal route_usage
+                    route_usage = usage
+
                 ranked = await rank_decisions_api_tools(
                     query=query,
                     tools=candidates,
@@ -475,6 +481,7 @@ class ProgressiveToolRail(DeepAgentRail):
                     max_tools=max_tools,
                     min_score=min_score,
                     include_no_tool=include_no_tool,
+                    usage_callback=capture_usage,
                 )
                 selected = [item.tool for item in ranked]
                 scores = {str(item.tool.name): item.score for item in ranked}
@@ -508,7 +515,7 @@ class ProgressiveToolRail(DeepAgentRail):
                 selected_names,
                 fingerprints=selected_fingerprints,
             )
-        if session is not None and not cache_hit:
+        if session is not None:
             session.update_state(
                 {
                     _TOOL_DISCOVERY_STATE_KEY: {
@@ -522,6 +529,7 @@ class ProgressiveToolRail(DeepAgentRail):
                         "api_base": getattr(self._config, "tool_discovery_api_base", None),
                         "names": selected_names,
                         "scores": scores,
+                        "usage": route_usage,
                         "selection_backend": selection_backend,
                         "fallback_error": fallback_error,
                         "manual_search_fallback": manual_search_fallback,
