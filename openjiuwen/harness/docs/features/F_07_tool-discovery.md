@@ -43,7 +43,7 @@ remains the default and is also the failure fallback for automatic discovery.
   `tool_discovery_api_base` and `tool_discovery_api_key` are shared by both
   `jev` and `local`. The `local` backend requires an explicit endpoint URL so it
   cannot silently send requests to the hosted Jev service. Local adapters such
-  as Kev or Valen receive the same state, user query, conversation context, and
+  as Laya or Valen receive the same state, user query, conversation context, and
   deferred-tool choices through the System 1 request schema;
   `tool_discovery_max_tools` caps results and `tool_discovery_min_score` is the
   configurable strict score floor. Set the floor to `0.0` to retain all positive

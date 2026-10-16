@@ -42,6 +42,8 @@ def _choice_request(
     model: str,
     conversation: List[Dict[str, Any]] | None = None,
     include_no_tool: bool = True,
+    max_len: int | None = None,
+    head_max_len: int | None = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Build one typed Choice per bounded group and retain local key mappings."""
     questions: Dict[str, Any] = {}
@@ -81,6 +83,10 @@ def _choice_request(
         "state": state,
         "questions": questions,
     }
+    if max_len is not None:
+        request["max_len"] = max_len
+    if head_max_len is not None:
+        request["head_max_len"] = head_max_len
     return request, key_to_tool
 
 
@@ -112,6 +118,8 @@ async def rank_decisions_api_tools(
     min_score: float = 0.01,
     include_no_tool: bool = True,
     request_timeout: float = 15.0,
+    max_len: int | None = None,
+    head_max_len: int | None = None,
 ) -> List[ScoredTool]:
     """Return the highest-scoring registered tools selected by JEV.
 
@@ -145,6 +153,8 @@ async def rank_decisions_api_tools(
         model=model,
         conversation=conversation,
         include_no_tool=include_no_tool,
+        max_len=max_len,
+        head_max_len=head_max_len,
     )
     response = await asyncio.to_thread(
         _post_decisions, request, token, request_timeout, endpoint
